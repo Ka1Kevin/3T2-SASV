@@ -1,0 +1,3 @@
+
+SASV RESULT
+	a-DCF		= 0.532898082
