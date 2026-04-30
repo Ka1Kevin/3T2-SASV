@@ -38,9 +38,7 @@ from wedefense.utils.utils import get_logger, parse_config_or_kwargs, set_seed, 
     lab2id
 from torch.nn.utils.rnn import pad_sequence
 import wedefense.dataset.customize_collate_fn as nii_collate_fn
-from wedefense.models.loss import angleproto_sasv
 import torch.nn as nn
-setattr(nn, "LossFunction", angleproto_sasv.LossFunction)
 import random
 from torch.utils.data import Subset
 from wedefense.dataset import processor
@@ -297,7 +295,7 @@ def train(config='conf/config.yaml', **kwargs):
                 configs['model_args']['feat_dim'] /
                 abs(configs['model_args']['embed_dim']))
     else:
-        configs['projection_args']['embed_dim'] = base_dim # prototypical
+        configs['projection_args']['embed_dim'] = base_dim
     configs['projection_args']['num_class'] = len(lab2id_dict)
     configs['projection_args']['do_lm'] = configs.get('do_lm', False)
     if configs['data_type'] != 'feat' and configs['dataset_args'][

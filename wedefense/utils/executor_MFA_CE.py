@@ -34,8 +34,8 @@ def build_embeds(model, test, refs, configs):
         all_wavs = all_wavs.reshape(B * (1 + N_refs), T)         # (B*(1+N),T)
         all_embeds = model(all_wavs)                             # (B*(1+N),D)
         all_embeds = all_embeds.reshape(B, 1 + N_refs, -1)       # (B,1+N,D)
-        # embeds = all_embeds.reshape(B, -1)                     # (B,(1+N)*D)
-        return all_embeds # prototypical
+        embeds = all_embeds.reshape(B, -1)                       # (B,(1+N)*D)
+        return embeds
 
     elif fusion_type == 'xattn_add':
         if not hasattr(model.module, "fusion_module"):
@@ -84,8 +84,7 @@ def train_epoch(dataloader,
     torch.autograd.set_detect_anomaly(True)
 
     loss_meter = tnt.meter.AverageValueMeter()
-    acc_meter = tnt.meter.AverageValueMeter() # prototypical
-    # acc_meter = tnt.meter.ClassErrorMeter(accuracy=True)
+    acc_meter = tnt.meter.ClassErrorMeter(accuracy=True)
     
     for i, batch in enumerate(dataloader):
         model.module._debug_step = i
@@ -98,46 +97,15 @@ def train_epoch(dataloader,
         refs = batch['refs'].to(device).float()   # (B, N_refs, T) (200, 1, 80000)
         targets = batch['labels'].long().to(device)
         
-        # with torch.cuda.amp.autocast(enabled=configs['enable_amp']):
         with torch.amp.autocast('cuda', enabled=configs['enable_amp']):
-            # test_embeds = model(test) # (200, 192)
-            # 逐个ref送入模型
             embeds = build_embeds(model, test, refs, configs)
-            expected = configs['projection_args']['embed_dim']
-            # assert embeds.size(1) == expected, f"embeds={embeds.shape}, projection expects {expected}"
-            assert embeds.size(2) == expected, f"embeds={embeds.shape}, projection expects {expected}" # prototypical
-            # ===== 改动结束 =====
+            logits = model.module.projection(embeds, targets)
+            if isinstance(logits, tuple):
+                logits = logits[0]
+            loss = criterion(logits, targets)
 
-            # logits = model.module.projection(embeds, targets)
-            # if isinstance(logits, tuple):
-            #     logits = logits[0]
-            # loss = criterion(logits, targets)
-
-            loss, prec1 = criterion(embeds, targets, num_bna=embeds.size(0)) # prototypical
-            '''
-            ref_embeds_list = []
-            for n in range(N_refs):
-                ref_wavs = refs[:, n, :]                # (B, T)
-                ref_embeds = model(ref_wavs)            # (B, D)
-                ref_embeds_list.append(ref_embeds)
-            refs_embeds = torch.stack(ref_embeds_list, dim=1)  # (B, N_refs, D) (200, 1, 192)
-
-            # 拼接或聚合
-            embeds = torch.cat([test_embeds.unsqueeze(1), refs_embeds], dim=1)  # (B, 1+N_refs, D)
-            embeds = embeds.view(B, -1)                                         # (B, (1+N_refs)*D)
-            # outputs = model.projection(embeds, targets)
-            outputs = model.module.projection(embeds, targets)
-            # if isinstance(outputs, tuple):
-            #     outputs, loss = outputs
-            # else:
-            #     loss = criterion(outputs, targets)
-            loss, prec1 = criterion(embeds, targets)
-            '''
-
-        # loss_meter.add(loss.item())
-        loss_meter.add(float(loss.detach().cpu().item())) # prototypical
-        acc_meter.add(prec1.item()) # prototypical
-        # acc_meter.add(logits.cpu().detach().numpy(), targets.cpu().numpy())
+        loss_meter.add(loss.item())
+        acc_meter.add(logits.cpu().detach().numpy(), targets.cpu().numpy())
 
         optimizer.zero_grad()
         scaler.scale(loss).backward()
@@ -175,11 +143,9 @@ def val_epoch(val_dataloader,
               device,
               configs,
               wandb_log=None):
-    """Validate the model on the validation set (MFA_Conformer only)."""
     model.eval()
     val_loss_meter = tnt.meter.AverageValueMeter()
-    # val_acc_meter = tnt.meter.ClassErrorMeter(accuracy=True)
-    val_acc_meter = tnt.meter.AverageValueMeter() # prototypical
+    val_acc_meter = tnt.meter.ClassErrorMeter(accuracy=True)
 
     with torch.no_grad():
         for i, batch in enumerate(val_dataloader):
@@ -191,20 +157,13 @@ def val_epoch(val_dataloader,
             with torch.amp.autocast('cuda', enabled=configs['enable_amp']):
                 embeds = build_embeds(model, test, refs, configs)
                 expected = configs['projection_args']['embed_dim']
-                # assert embeds.size(1) == expected, f"embeds={embeds.shape}, projection expects {expected}"
-                assert embeds.size(2) == expected, f"embeds={embeds.shape}, projection expects {expected}" # prototypical
-                # 通过 projection 得到 logits
-                # logits = model.module.projection(embeds, targets)
-                # if isinstance(logits, tuple):
-                #     logits = logits[0]
-                # loss = criterion(logits, targets)
-                loss, prec1 = criterion(embeds, targets, num_bna=embeds.size(0)) # prototypical
+                logits = model.module.projection(embeds, targets)
+                if isinstance(logits, tuple):
+                    logits = logits[0]
+                loss = criterion(logits, targets)
 
-            # === 记录 ===
-            # val_loss_meter.add(loss.item())
-            # val_acc_meter.add(logits.cpu().detach().numpy(), targets.cpu().numpy())
-            val_loss_meter.add(float(loss.detach().cpu().item())) # prototypical
-            val_acc_meter.add(prec1.item()) # prototypical
+            val_loss_meter.add(loss.item())
+            val_acc_meter.add(logits.cpu().detach().numpy(), targets.cpu().numpy())
 
             if wandb_log:
                 wandb_log.log({
