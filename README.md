@@ -435,3 +435,327 @@ Paper:
 https://arxiv.org/abs/2603.13780
 
 ---
+
+
+---
+# Quick Start for Inference
+## Stage 1: Prepare Inference Data
+
+For inference, prepare the following three files:
+
+```text
+data/test/
+├── raw.list
+├── utt2lab
+└── sasv_key_file.txt
+```
+
+---
+
+### `raw.list` Format
+
+`raw.list` should contain one JSON object per line:
+
+```json
+{"key": "<trial_key>", "lab": "<label>", "wav": ["<reference_wav_1>", "<reference_wav_2>", "<test_wav>"]}
+```
+
+Notes:
+
+- `key` can be manually defined.
+- `lab` should be one of: `target`, `nontarget`, or `spoof`.
+- `wav` contains reference utterance(s) followed by the test utterance.
+- The test utterance must always be the last item in `wav`.
+
+---
+
+### `utt2lab` Format
+
+```text
+<trial_key> <label>
+```
+
+The `<trial_key>` must match the `key` field in `raw.list`.
+
+### `sasv_key_file` Format
+
+```text
+spk	filename	cm-label	asv-label
+```
+
+Label mapping:
+
+| Trial Label | cm-label   | asv-label   |
+| ----------- | ---------- | ----------- |
+| `spoof`     | `spoof`    | `spoof`     |
+| `target`    | `bonafide` | `target`    |
+| `nontarget` | `bonafide` | `nontarget` |
+
+---
+
+### Example
+
+`raw.list`
+
+```json
+{"key": "D_0062#D_0000000001", "lab": "spoof", "wav": ["/export/fs05/arts/dataset/ASVspoof5/flac_D/D_A0000001158.flac", "/export/fs05/arts/dataset/ASVspoof5/flac_D/D_0000000001.flac"]}
+```
+
+`utt2lab`
+
+```text
+D_0062#D_0000000001 spoof
+```
+
+In this example:
+
+```text
+/export/fs05/arts/dataset/ASVspoof5/flac_D/D_A0000001158.flac → reference utterance
+/export/fs05/arts/dataset/ASVspoof5/flac_D/D_0000000001.flac  → test utterance
+```
+
+`sasv_key_file.txt`
+
+```text
+spk	filename	cm-label	asv-label
+D_0062	D_0000000001	spoof	spoof
+D_0062	D_0000000002	bonafide	target
+D_0062	D_0000000003	bonafide	nontarget
+```
+
+## Stage 2: Extract Embeddings
+
+After preparing `raw.list` and `utt2lab`, extract embeddings using:
+
+```bash
+local/extract_emb.sh \
+  --exp_dir <experiment_output_dir> \       # directory to save embeddings and later outputs
+  --model_path <checkpoint_path> \          # pretrained checkpoint used for embedding extraction
+  --nj <num_jobs> \                         			# number of parallel jobs
+  --gpus "<gpu_ids>" \                     			  # GPU IDs, e.g., "[0]" or "[0,1]"
+  --data_type "raw" \                      				# input data format; use "raw" for raw.list
+  --data <data_dir> \                       			# data directory containing raw.list and utt2lab
+  --num_ref_utts <num_reference_utts> \  # number of reference utterances per trial
+  --fusion_type <fusion_method> \       	  # fusion method, e.g., feat_cat or xattn_add
+  --xattn_heads <num_attention_heads>   # number of cross-attention heads
+```
+
+Expected input:
+
+```text
+exp/test/raw.list
+```
+
+Expected outputs:
+
+```text
+exp/test/embeddings/
+├── embedding_000.ark
+├── embedding_000.scp
+├── extract.result
+└── embedding.scp
+```
+### Example
+
+```bash
+local/extract_emb.sh \
+  --exp_dir exp/test \
+  --model_path checkpoints/ska_tdnn_asvspoof5_best_model.pt \
+  --nj 1 \
+  --gpus "[0]" \
+  --data_type "raw" \
+  --data data/test \
+  --num_ref_utts 1 \
+  --fusion_type "xattn_add" \
+  --xattn_heads 4
+```
+
+### Output: `embedding.scp`
+
+After embedding extraction, the main output file is:
+
+```text
+exp/test/embeddings/embedding.scp
+```
+
+Format:
+
+```text
+<trial_key> <ark_path>:<byte_offset>
+```
+
+Example:
+
+```text
+D_0062#D_0000000001 exp/test/embeddings/embedding_000.ark:20
+```
+
+Fields:
+
+| Field | Description |
+|---|---|
+| `trial_key` | The same trial key defined in `raw.list` and `utt2lab` |
+| `ark_path` | Path to the binary embedding archive file |
+| `byte_offset` | Offset position of the embedding entry inside the `.ark` file |
+
+The corresponding `.ark` file stores the actual embedding vectors, while `embedding.scp` provides an index for locating each embedding.
+
+## Stage 3: Run Inference
+
+After embedding extraction, run `wedefense/bin/infer.py` to generate logits and posterior outputs.
+
+### Format
+
+```bash
+mkdir -p <posterior_output_dir>
+
+python wedefense/bin/infer.py \
+  --model_path <checkpoint_path> \             				 # pretrained checkpoint used for inference
+  --config <config_path> \                      					  # model config file
+  --num_classes 3 \                             						# number of classes: target / nontarget / spoof
+  --embedding_scp_path <embedding_scp_path> \   # embedding.scp generated in Stage 2
+  --out_path <posterior_output_dir> \           			   # directory to save logits and posteriors
+  --data_type "raw" \                          							 # input data type
+  --num_ref_utts <num_reference_utts> \         		  # number of reference utterances per trial
+  --fusion_type <fusion_method> \               			   # fusion method, e.g., feat_cat or xattn_add
+  --xattn_heads <num_attention_heads>           		 # number of cross-attention heads
+```
+
+Expected input:
+
+```text
+exp/test/embeddings/embedding.scp
+```
+
+Expected outputs:
+
+```text
+exp/test/posteriors/
+├── logits.ark
+├── logits.scp
+├── posteriors.ark
+└── posteriors.scp
+```
+
+### Example
+
+```bash
+mkdir -p exp/test/posteriors
+
+python wedefense/bin/infer.py \
+  --model_path checkpoints/ska_tdnn_asvspoof5_best_model.pt \
+  --config exp/test/config.yaml \
+  --num_classes 3 \
+  --embedding_scp_path exp/test/embeddings/embedding.scp \
+  --out_path exp/test/posteriors \
+  --data_type "raw" \
+  --num_ref_utts 1 \
+  --fusion_type "xattn_add" \
+  --xattn_heads 4
+```
+
+### Output: `logits.scp`
+
+Format:
+
+```text
+<trial_key> <ark_path>:<byte_offset>
+```
+
+Example:
+
+```text
+D_0062#D_0000000001 exp/test/posteriors/logits.ark:20
+```
+
+### Output: `posteriors.scp`
+
+Format:
+
+```text
+<key> <ark_path>:<byte_offset>
+```
+
+Example:
+
+```text
+D exp/test/posteriors/posteriors.ark:2
+```
+
+Notes:
+
+- `.scp` files are index files.
+- `.ark` files store the actual tensor values.
+- `logits.scp` indexes raw logits.
+- `posteriors.scp` indexes posterior probabilities.
+
+## Stage 4: Convert Logits to LLR Scores
+
+After inference, convert `logits.scp` into final SASV LLR scores using `wedefense/bin/logits_to_llr_new.py`.
+
+### Format
+
+```bash
+python wedefense/bin/logits_to_llr_new.py \
+  --logits_scp_path <logits_scp_path> \   # logits.scp generated in Stage 3
+  --train_label <label_file>              			# label file used to compute class priors
+```
+
+Expected input:
+
+```text
+└── exp/test/posteriors/logits.scp
+└── data/test/utt2lab
+```
+
+Expected output:
+
+```text
+exp/test/posteriors/llr.txt
+```
+
+### Example
+
+```bash
+python wedefense/bin/logits_to_llr_new.py \
+  --logits_scp_path exp/test/posteriors/logits.scp \
+  --train_label data/test/utt2lab
+```
+
+The output file `llr.txt` has the format:
+
+```text
+spk	filename	cm-score	asv-score	sasv-score
+```
+
+Example:
+
+```text
+D_0062	D_0000000001	-	-	-4.054442405700684
+```
+
+## Stage 5: Compute a-DCF
+
+After generating `llr.txt`, compute the final SASV evaluation metric using `evaluation.py`.
+
+### Format
+
+```bash
+python wedefense/metrics/detection/evaluation.py \
+  --m <evaluation_mode> \              # evaluation mode; use t2_single for SASV Track 2 single-system scoring
+  --sasv <sasv_score_file> \           	# path to llr.txt generated in Stage 4
+  --sasv_keys <sasv_key_file>        # path to the prepared SASV key file
+```
+
+---
+
+### Example
+
+```bash
+python wedefense/metrics/detection/evaluation.py \
+  --m t2_single \
+  --sasv exp/test/posteriors/llr.txt \
+  --sasv_keys data/test/sasv_key_file.txt
+```
+
+The evaluation results are printed in the terminal.
