@@ -461,10 +461,11 @@ data/test/
 ```
 
 Notes:
-
 - `key` can be manually defined.
+  - `trial_key` should contain format as: <enroll_id>#<test_id>
 - `lab` should be one of: `target`, `nontarget`, or `spoof`.
 - `wav` contains reference utterance(s) followed by the test utterance.
+  - here, <reference_wav_1>, <reference_wav_2>... are enroll utterances for <enroll_id>, the last <test_wav> corrsponding to <test_id>.
 - The test utterance must always be the last item in `wav`.
 
 ---
