@@ -54,14 +54,8 @@ This repository supports cross-dataset inference and evaluation under a unified 
 Create and activate a Python environment:
 
 ```bash
-conda create -n wedefense python=3.10
+bash ./install_env.sh
 conda activate wedefense
-```
-
-Install dependencies from the provided requirement file:
-
-```bash
-pip install -r requirements.txt
 ```
 
 ---
